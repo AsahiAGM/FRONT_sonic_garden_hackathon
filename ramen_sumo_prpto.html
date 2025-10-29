@@ -1,0 +1,343 @@
+<!--
+Files included in this single document:
+1) index.html (below) -- the playable prototype (client-only). Open directly in a browser or serve statically.
+2) server.js (Node/Express) -- tiny server to run on localhost:3000. Paste into a file if you want a Node server.
+
+Run instructions (short):
+- Quick (no Node required): open this file in a modern browser (drag-and-drop), or run a static server:
+  python3 -m http.server 8000    # then open http://localhost:8000/ramen-sumo-prototype.html
+  OR
+  npx http-server .              # then open the given URL
+
+- Node server (optional): create server.js with the snippet below and run `node server.js`, open http://localhost:3000
+
+server.js:
+----------------
+// const express = require('express');
+// const path = require('path');
+// const app = express();
+// app.use(express.static(path.join(__dirname)));
+// const PORT = process.env.PORT || 3000;
+// app.listen(PORT, () => console.log(`Server listening http://localhost:${PORT}`));
+----------------
+
+Design notes:
+- MVVM pattern implemented in vanilla JS: Model (game state), ViewModel (GameVM), View (canvas + DOM bindings).
+- Controls: Left Shift -> left cup push (to the right). Right Shift -> right cup push (to the left).
+- Objective: each cup has `water` 0..100. Collisions cause water spill. Winner is who retains more water when a round timer ends.
+- Simple pixel-style rendering on canvas, physics approximated (position, velocity, impulse, friction).
+-->
+
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ラーメン相撲 — プロトタイプ</title>
+<style>
+  :root{--bg:#F07F2F;--plate:#8B5A2B;--ui:#2b2b2b}
+  html,body{height:100%;margin:0;font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP"}
+  .wrap{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:18px;background:linear-gradient(180deg,var(--bg),#e96e21);height:100vh;box-sizing:border-box}
+  h1{color:#fff;margin:6px 0 14px;font-size:20px;text-shadow:0 2px 0 rgba(0,0,0,0.25)}
+  #gameCanvas{image-rendering:pixelated;border:8px solid rgba(0,0,0,0.2);background:#f7e2c9;display:block}
+  .hud{width:640px;display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:#111}
+  .meter{display:flex;flex-direction:column;align-items:center;width:180px}
+  .bar{width:160px;height:14px;background:#ddd;border:2px solid rgba(0,0,0,0.2);position:relative}
+  .fill{height:100%;background:linear-gradient(90deg,#ffdb6a,#ff8a00);width:100%}
+  .label{font-size:12px;color:#fff;text-shadow:0 1px 0 rgba(0,0,0,0.4)}
+  .center-ui{display:flex;flex-direction:column;align-items:center}
+  button{padding:6px 10px;border-radius:6px;border:none;background:#fff;cursor:pointer}
+  .small{font-size:12px;color:#222}
+  .controls{margin-top:8px;color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ラーメン相撲（プロトタイプ） — 左Shift / 右Shiftでトントン</h1>
+  <canvas id="gameCanvas" width="640" height="360"></canvas>
+  <div class="hud">
+    <div class="meter">
+      <div class="label">Player 1</div>
+      <div class="bar"><div id="p1Fill" class="fill"></div></div>
+      <div class="small">湯量: <span id="p1Water">100</span></div>
+    </div>
+    <div class="center-ui">
+      <div class="small">残り時間: <span id="timeLeft">30</span>s</div>
+      <div class="controls small">左Shift => 左のカップを右へ押す。右Shift => 右のカップを左へ押す。</div>
+      <div style="margin-top:8px"><button id="restartBtn">リスタート</button></div>
+    </div>
+    <div class="meter">
+      <div class="label">Player 2</div>
+      <div class="bar"><div id="p2Fill" class="fill"></div></div>
+      <div class="small">湯量: <span id="p2Water">100</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ------------------ Model ------------------
+const Model = {
+  arena: { left: 80, right: 560 },
+  cup: {
+    radius: 28,
+    maxWater: 100
+  },
+  roundTime: 30 // seconds
+};
+
+// ------------------ ViewModel ------------------
+class GameVM {
+  constructor() {
+    this.p1 = { x: 200, vx:0, water: Model.cup.maxWater, color: '#e74c3c' };
+    this.p2 = { x: 440, vx:0, water: Model.cup.maxWater, color: '#27ae60' };
+    this.timeLeft = Model.roundTime;
+    this.running = false;
+    this.lastTick = null;
+    this.onUpdate = null; // view binds to this
+    this.collisionCooldown = 0; // to limit repeated collisions
+    this.typeMods = this.randomizeTypes();
+  }
+
+  randomizeTypes(){
+    // Simple character differences: 'sturdy' loses less water, 'splashy' causes more water on hit
+    const types = [ 'balanced','sturdy','splashy' ];
+    return {
+      p1: types[Math.floor(Math.random()*types.length)],
+      p2: types[Math.floor(Math.random()*types.length)]
+    }
+  }
+
+  start(){
+    this.reset();
+    this.running = true;
+    this.lastTick = performance.now();
+    requestAnimationFrame(this.loop.bind(this));
+  }
+
+  reset(){
+    this.p1.x = 200; this.p1.vx = 0; this.p1.water = Model.cup.maxWater;
+    this.p2.x = 440; this.p2.vx = 0; this.p2.water = Model.cup.maxWater;
+    this.timeLeft = Model.roundTime;
+    this.running = false;
+    this.collisionCooldown = 0;
+    this.typeMods = this.randomizeTypes();
+    if(this.onUpdate) this.onUpdate();
+  }
+
+  loop(now){
+    if(!this.running) return;
+    const dt = Math.min(0.05,(now - this.lastTick)/1000);
+    this.lastTick = now;
+    this.step(dt);
+    if(this.onUpdate) this.onUpdate();
+    if(this.timeLeft <= 0) { this.running = false; return; }
+    requestAnimationFrame(this.loop.bind(this));
+  }
+
+  step(dt){
+    // Apply velocities
+    this.p1.x += this.p1.vx * dt;
+    this.p2.x += this.p2.vx * dt;
+
+    // Simple world bounds
+    const minX = Model.arena.left + Model.cup.radius;
+    const maxX = Model.arena.right - Model.cup.radius;
+    this.p1.x = Math.max(minX, Math.min(maxX, this.p1.x));
+    this.p2.x = Math.max(minX, Math.min(maxX, this.p2.x));
+
+    // friction
+    this.p1.vx *= Math.pow(0.85, dt*60);
+    this.p2.vx *= Math.pow(0.85, dt*60);
+
+    // collision check
+    const dist = Math.abs(this.p1.x - this.p2.x);
+    const threshold = Model.cup.radius * 2 - 6;
+    if(dist < threshold && this.collisionCooldown <= 0){
+      // compute impulse based on relative velocity
+      const rel = Math.abs(this.p1.vx - this.p2.vx);
+      const baseSpill = Math.min(12, 4 + rel * 6);
+      // character type modifiers
+      const p1mod = this.typeMods.p1 === 'sturdy' ? 0.7 : this.typeMods.p1 === 'splashy' ? 1.2 : 1.0;
+      const p2mod = this.typeMods.p2 === 'sturdy' ? 0.7 : this.typeMods.p2 === 'splashy' ? 1.2 : 1.0;
+      const p1spill = baseSpill * p1mod * (Math.random()*0.6 + 0.7);
+      const p2spill = baseSpill * p2mod * (Math.random()*0.6 + 0.7);
+      // subtract
+      this.p1.water = Math.max(0, this.p1.water - p1spill);
+      this.p2.water = Math.max(0, this.p2.water - p2spill);
+      this.collisionCooldown = 0.25; // secs
+      // minor bounce
+      const sign = (this.p1.x < this.p2.x) ? -1 : 1;
+      this.p1.vx += -sign * 40 * 0.5;
+      this.p2.vx += sign * 40 * 0.5;
+    }
+    this.collisionCooldown -= dt;
+
+    // countdown
+    this.timeLeft -= dt;
+  }
+
+  // controls: leftShift => left cup push right, rightShift => right cup push left
+  pushLeft(){
+    if(!this.running) return;
+    this.p1.vx += 120; // impulse
+    // small self-water loss for aggressive push
+    this.p1.water = Math.max(0, this.p1.water - (this.typeMods.p1==='sturdy'?0.3:0.6));
+  }
+  pushRight(){
+    if(!this.running) return;
+    this.p2.vx -= 120;
+    this.p2.water = Math.max(0, this.p2.water - (this.typeMods.p2==='sturdy'?0.3:0.6));
+  }
+}
+
+// ------------------ View (canvas rendering + DOM bindings) ------------------
+(function(){
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  // scale to simulate pixelated retro feel
+  const scale = 2; // drawing logical 320x180 scaled to canvas sized 640x360
+  const w = canvas.width, h = canvas.height;
+
+  const vm = new GameVM();
+
+  // bind UI
+  const p1Fill = document.getElementById('p1Fill');
+  const p2Fill = document.getElementById('p2Fill');
+  const p1Water = document.getElementById('p1Water');
+  const p2Water = document.getElementById('p2Water');
+  const timeLeftEl = document.getElementById('timeLeft');
+  document.getElementById('restartBtn').addEventListener('click', ()=>{ vm.start(); });
+
+  vm.onUpdate = ()=>{
+    // update DOM
+    p1Fill.style.width = Math.max(0, (vm.p1.water / Model.cup.maxWater) * 100) + '%';
+    p2Fill.style.width = Math.max(0, (vm.p2.water / Model.cup.maxWater) * 100) + '%';
+    p1Water.textContent = Math.floor(vm.p1.water);
+    p2Water.textContent = Math.floor(vm.p2.water);
+    timeLeftEl.textContent = Math.max(0, Math.ceil(vm.timeLeft));
+    render();
+    if(!vm.running){
+      // round ended
+      renderEnd();
+    }
+  };
+
+  function render(){
+    // clear
+    ctx.clearRect(0,0,w,h);
+    // background grid-ish
+    ctx.fillStyle = '#f2d9b6';
+    ctx.fillRect(0,0,w,h);
+    // dohyo plate
+    const cx = w/2, cy = h/2 + 30;
+    ctx.fillStyle = '#8B5A2B';
+    roundRect(ctx, cx-220, cy-70, 440, 120, 20, true, false);
+    // center line
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(cx-2, cy-70, 4, 120);
+
+    // draw cups as pixelated sprites (simple)
+    drawCup(vm.p1.x, cy, vm.p1.color, vm.p1.water, vm.typeMods.p1);
+    drawCup(vm.p2.x, cy, vm.p2.color, vm.p2.water, vm.typeMods.p2);
+
+    // title banner
+    ctx.font = '24px sans-serif';
+    ctx.fillStyle = '#3b2b1d';
+    ctx.textAlign = 'center';
+    ctx.fillText('ラーメン相撲（プロトタイプ）', w/2, 34);
+  }
+
+  function renderEnd(){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,w,h);
+    ctx.fillStyle = '#fff';
+    ctx.font = '28px sans-serif';
+    ctx.textAlign = 'center';
+    const winner = vm.p1.water > vm.p2.water ? 'Player 1 の勝ち！' : vm.p2.water > vm.p1.water ? 'Player 2 の勝ち！' : '引き分け！';
+    ctx.fillText(winner, w/2, h/2 - 8);
+    ctx.font = '16px sans-serif';
+    ctx.fillText('リスタートするには「リスタート」ボタンを押してください', w/2, h/2 + 18);
+    ctx.restore();
+  }
+
+  function drawCup(x, y, color, water, type){
+    const s = 1; // pixel scale
+    // cup shadow
+    ctx.save();
+    ctx.translate(0,0);
+    // body
+    const cupW = 64, cupH = 52;
+    const left = x - cupW/2, top = y - cupH/2 - 10;
+    ctx.fillStyle = color;
+    roundRect(ctx, left, top, cupW, cupH, 8, true, false);
+    // rim
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(left+6, top-6, cupW-12, 8);
+    // face
+    ctx.fillStyle = '#2b2b2b';
+    ctx.fillRect(left+18, top+14, 10, 6); // eye
+    ctx.fillRect(left+36, top+14, 10, 6);
+    // mouth
+    ctx.fillRect(left+24, top+26, 16, 6);
+    // arms/legs (pixel-y)
+    ctx.fillStyle = '#f0b86b';
+    ctx.fillRect(left-6, top+22, 12, 8); // left arm
+    ctx.fillRect(left+cupW-6, top+22, 12, 8); // right arm
+    ctx.fillRect(left+12, top+cupH-6, 10, 8); // left leg
+    ctx.fillRect(left+cupW-22, top+cupH-6, 10, 8); // right leg
+
+    // noodle soup (water) draw as orange rect clipped
+    const waterRatio = Math.max(0, water / Model.cup.maxWater);
+    const soupH = Math.floor((cupH-14) * waterRatio);
+    ctx.fillStyle = '#bf6e08';
+    ctx.fillRect(left+8, top+6 + (cupH-14 - soupH), cupW-16, soupH);
+
+    // small water droplets when low
+    if(waterRatio < 0.35){
+      ctx.fillStyle = '#8bd3ff';
+      ctx.fillRect(left+cupW-18, top+cupH-8, 4, 6);
+      ctx.fillRect(left+6, top+cupH-10, 4, 6);
+    }
+
+    // type badge
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(type, left+8, top+cupH+18);
+
+    ctx.restore();
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+    if (typeof stroke === 'undefined') stroke = true;
+    if (typeof r === 'undefined') r = 5;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+
+  // input handling
+  window.addEventListener('keydown', (e)=>{
+    if(e.code === 'ShiftLeft'){
+      vm.pushLeft();
+    } else if(e.code === 'ShiftRight'){
+      vm.pushRight();
+    }
+    // space to start
+    if(e.code === 'Space'){ if(!vm.running) vm.start(); }
+  });
+
+  // start initially
+  vm.start();
+
+})();
+</script>
+</body>
+</html>
