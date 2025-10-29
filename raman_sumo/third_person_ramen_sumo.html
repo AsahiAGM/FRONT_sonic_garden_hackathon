@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>三人称トントン相撲（プロトタイプ）</title>
+<style>
+  :root{--bg:#0d1221;--ui:#efeef0}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#10203a,#071022);color:var(--ui);font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP"}
+  .wrap{display:flex;flex-direction:column;align-items:center;padding:12px;box-sizing:border-box;height:100vh}
+  h1{margin:6px 0 10px;font-size:18px;color:#fff}
+  #gameCanvas{background:linear-gradient(180deg,#203a5a,#0e2033);border:4px solid rgba(255,255,255,0.06);width:900px;height:600px;display:block}
+  .hud{width:900px;display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+  .center{display:flex;flex-direction:column;align-items:center}
+  button{padding:6px 10px;border-radius:6px;border:none;background:#fff;color:#111;cursor:pointer}
+  .small{font-size:13px;color:#ddd}
+  .status{font-size:14px;color:#fff}
+  .termWins{display:flex;gap:12px}
+  .muted{color:rgba(255,255,255,0.6)}
+  .credits{font-size:12px;color:#bbb;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>三人称トントン相撲（試作）</h1>
+  <canvas id="gameCanvas" width="900" height="600"></canvas>
+
+  <div class="hud">
+    <div class="left">
+      <div class="status">Term: <span id="termIdx">-</span> ／ <span id="termMax">3</span></div>
+      <div class="small">Time: <span id="timeLeft">0</span>s</div>
+    </div>
+    <div class="center">
+      <div class="status">Score: <span id="score">0</span></div>
+      <div class="termWins">
+        <div class="small">Wins: <span id="wins">P0</span></div>
+        <div class="small muted">(倒した／到達)</div>
+      </div>
+    </div>
+    <div class="right">
+      <button id="startBtn">スタート</button>
+    </div>
+  </div>
+
+  <div class="credits">
+    Controls: 左Shift（Left Shift）→ 右前, 右Shift（Right Shift）→ 左前, 同時押しでまっすぐ前進。<br>
+    ローカルで動作：ファイル保存後 `python3 -m http.server` 等で起動し、ブラウザで開いてください。
+  </div>
+</div>
+
+<script>
+// ------------------ Model ------------------
+const Model = {
+  field: { radius: 260 },   // x,z の円形フィールド半径（ワールド単位）
+  player: { x: 0, z: 40, radius: 18, maxSpeed: 260 }, // player z: 0 = 手前、正が奥
+  enemy: { spawnZ: 800, maxZ: 900, baseSpeed: 40, radius: 16 },
+  termTime: 50,   // 秒（ゲーム本体）
+  resultTime: 10, // 秒（結果表示）
+  terms: 3
+};
+
+// ------------------ ViewModel ------------------
+class GameVM {
+  constructor() {
+    this.resetAll();
+    this.onUpdate = null;
+  }
+
+  resetAll(){
+    this.currentTerm = 0;
+    this.termWins = { player: 0, enemy: 0 }; // player が「倒した数＞到達数」で勝ち判定
+    this.phase = 'idle'; // 'idle'|'play'|'result'|'end'
+    this.player = { x: 0, z: 40, vx:0, vz:0, radius: Model.player.radius };
+    this.score = { defeated:0, passed:0 };
+    this.enemies = [];
+    this.timeLeft = Model.termTime;
+    this.lastTick = null;
+    this.spawnTimer = 0;
+    this.input = { leftShift:false, rightShift:false };
+  }
+
+  start(){
+    this.currentTerm = 1;
+    this.termWins = { player:0, enemy:0 };
+    this.startTerm();
+    this.phase = 'play';
+    this.lastTick = performance.now();
+    requestAnimationFrame(this.loop.bind(this));
+  }
+
+  startTerm(){
+    // reset player & enemies
+    this.player.x = 0; this.player.z = 40; this.player.vx = 0; this.player.vz = 0;
+    this.enemies = [];
+    this.score.defeated = 0; this.score.passed = 0;
+    this.timeLeft = Model.termTime;
+    this.spawnTimer = 0;
+    this.phase = 'play';
+    this.lastTick = performance.now();
+  }
+
+  loop(now){
+    if(this.phase === 'idle') return;
+    const dt = Math.min(0.05,(now - (this.lastTick||now))/1000);
+    this.lastTick = now;
+
+    if(this.phase === 'play'){
+      this.step(dt);
+      if(this.timeLeft <= 0){
+        // 結果判定
+        this.phase = 'result';
+        this.timeLeft = Model.resultTime;
+        // term 勝敗記録（倒した数 > 到達数 なら player の勝ち）
+        if(this.score.defeated > this.score.passed) this.termWins.player++;
+        else if(this.score.passed > this.score.defeated) this.termWins.enemy++;
+        // advance term or end after showing result
+      }
+    } else if(this.phase === 'result'){
+      this.timeLeft -= dt;
+      if(this.timeLeft <= 0){
+        if(this.currentTerm < Model.terms){
+          this.currentTerm++;
+          this.startTerm();
+        } else {
+          this.phase = 'end';
+          // no more loop updates after rendering final screen (but keep one final update)
+        }
+      }
+    }
+
+    if(this.onUpdate) this.onUpdate();
+    if(this.phase !== 'end') requestAnimationFrame(this.loop.bind(this));
+  }
+
+  step(dt){
+    // spawn enemies periodically (difficulty scales with term)
+    this.spawnTimer -= dt;
+    const spawnInterval = Math.max(0.6, 1.6 - (this.currentTerm-1)*0.3); // termが進むと頻度UP
+    if(this.spawnTimer <= 0){
+      this.spawnTimer = spawnInterval;
+      this.spawnEnemy();
+    }
+
+    // input -> apply impulses
+    this.applyInput(dt);
+
+    // apply velocities, clamp inside circular field
+    this.player.x += this.player.vx * dt;
+    this.player.z += this.player.vz * dt;
+
+    // gentle drag
+    const drag = Math.pow(0.9, dt*60);
+    this.player.vx *= drag;
+    this.player.vz *= drag;
+
+    // clamp to field circle (x,z center at 0, z min maybe 0)
+    const r = Model.field.radius;
+    const dist = Math.hypot(this.player.x, this.player.z - 0); // center at z=0 (player front)
+    if(dist > r){
+      const angle = Math.atan2(this.player.z, this.player.x);
+      this.player.x = Math.cos(angle) * r;
+      this.player.z = Math.sin(angle) * r;
+      this.player.vx = 0; this.player.vz = 0;
+    }
+    // keep front limit: don't let player go beyond z < 0 (offscreen)
+    if(this.player.z < 0) { this.player.z = 0; this.player.vz = 0; }
+
+    // update enemies
+    for(let i=this.enemies.length-1;i>=0;i--){
+      const e = this.enemies[i];
+      // basic approach: move forward (decrease z) toward 0 at base speed modified by term
+      const termSpeedFactor = 1 + (this.currentTerm-1)*0.25;
+      e.z -= (Model.enemy.baseSpeed * termSpeedFactor + e.speedBonus) * dt;
+      // slight x drift toward player x
+      const dx = this.player.x - e.x;
+      e.x += Math.sign(dx) * Math.min(Math.abs(dx), 10 * dt * (0.6 + Math.random()*0.8));
+
+      // check collision with player (world-space)
+      const dxp = e.x - this.player.x;
+      const dzp = e.z - this.player.z;
+      const d = Math.hypot(dxp, dzp);
+      const collisionDist = (e.radius + this.player.radius) * 0.9;
+      if(d < collisionDist){
+        // collision: player hits enemy if player is moving forward (vz negative) or just hits by position
+        // apply knockback to enemy (push it away along z)
+        const pushPower = Math.max(220, Math.abs(this.player.vz)*1.5 + Math.abs(this.player.vx)*0.6);
+        e.z += pushPower * 0.02; // push back toward far
+        e.hp -= 1 + Math.floor(Math.abs(this.player.vz)/80); // damage scales with forward speed
+        // small bounce player
+        this.player.vz = -Math.abs(120);
+        // push player slightly back in x too
+        this.player.vx *= 0.5;
+      }
+
+      // enemy reaches front (z <= player.z + reach) -> counts as passed
+      if(e.z <= 8){
+        this.score.passed++;
+        this.enemies.splice(i,1);
+        continue;
+      }
+      // enemy dies
+      if(e.hp <= 0){
+        this.score.defeated++;
+        this.enemies.splice(i,1);
+        continue;
+      }
+      // remove if too far back
+      if(e.z > Model.enemy.maxZ + 200) this.enemies.splice(i,1);
+    }
+
+    // countdown
+    this.timeLeft -= dt;
+  }
+
+  applyInput(dt){
+    // mapping:
+    // LeftShift => right-front (x +=, z -=)
+    // RightShift => left-front (x -=, z -=)
+    // Both => straight forward (x no change, z -= more)
+    const impulse = 360; // how strong each tap is
+    const forwardBase = 160;
+    if(this.input.leftShift && this.input.rightShift){
+      // both -> straight
+      this.player.vz -= forwardBase * 1.6;
+      // small x stabilization
+      this.player.vx *= 0.9;
+    } else if(this.input.leftShift){
+      this.player.vx += impulse * 0.7;
+      this.player.vz -= forwardBase * 1.0;
+    } else if(this.input.rightShift){
+      this.player.vx -= impulse * 0.7;
+      this.player.vz -= forwardBase * 1.0;
+    }
+    // clamp speeds
+    const max = Model.player.maxSpeed;
+    this.player.vx = Math.max(-max, Math.min(max, this.player.vx));
+    this.player.vz = Math.max(-max, Math.min(max, this.player.vz));
+  }
+
+  spawnEnemy(){
+    // spawn around x in [-r..r], z at spawnZ with some variation
+    const angle = (Math.random()*2 - 1) * Math.PI * 0.5; // biased toward center-ish
+    const distX = (Math.random()*0.9) * Model.field.radius * 0.6;
+    const x = (Math.random()*2-1) * Math.min(Model.field.radius*0.9, 220);
+    const z = Model.enemy.spawnZ + Math.random()*200;
+    const hp = 2 + Math.floor(Math.random()*3); // hp 2..4
+    const e = { x:x, z:z, hp:hp, radius: Model.enemy.radius, speedBonus: Math.random()*40 };
+    this.enemies.push(e);
+  }
+}
+
+// ------------------ View (canvas + DOM) ------------------
+(function(){
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.wi
