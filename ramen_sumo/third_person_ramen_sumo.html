@@ -49,7 +49,7 @@
 </div>
 
 <!-- Viewクラスなどが入っているメインJSファイル -->
-<script type="module" src="third_person_ramen_sumo.js">
+<script>
 
 // ------------------ Model ------------------
 const Model = {
@@ -219,19 +219,18 @@ class GameVM {
     // LeftShift => right-front (x +=, z -=)
     // RightShift => left-front (x -=, z -=)
     // Both => straight forward (x no change, z -= more)
-    const impulse = 360; // how strong each tap is
+    const impulse = 360;
     const forwardBase = 160;
     if(this.input.leftShift && this.input.rightShift){
-      // both -> straight
+      // both -> straight forward
       this.player.vz -= forwardBase * 1.6;
-      // small x stabilization
-      this.player.vx *= 0.9;
+      this.player.vx *= 0.9; // x安定化
     } else if(this.input.leftShift){
       this.player.vx += impulse * 0.7;
-      this.player.vz -= forwardBase * 1.0;
+      this.player.vz -= forwardBase;
     } else if(this.input.rightShift){
       this.player.vx -= impulse * 0.7;
-      this.player.vz -= forwardBase * 1.0;
+      this.player.vz -= forwardBase;
     }
     // clamp speeds
     const max = Model.player.maxSpeed;
@@ -307,13 +306,12 @@ class GameVM {
     // simple perspective projection: map world x,z to screen XY
     // camera is above and behind; map z (0..max) to scale & y offset
     const maxZ = Model.enemy.maxZ || 900;
-    const t = Math.max(0, Math.min(1, 1 - worldZ / maxZ)); // 0 at far, 1 at near
-    const scale = 0.4 + t * 1.2; // near => larger
-    const screenX = W/2 + worldX * (0.9 * scale);
-    // map z to vertical position: further is higher (toward top)
-    const baseY = H*0.65;
-    const screenY = baseY - (t * 380);
-    return { x: screenX, y: screenY, s: scale };
+	const t = Math.max(0, Math.min(1, worldZ / maxZ)); // 0:手前, 1:奥
+	const scale = 0.3 + 0.7 * (1 - t); // 奥ほど小さく
+	const screenX = W/2 + worldX * scale;
+	const baseY = H*0.75; // プレイヤー画面下固定
+	const screenY = baseY - (1-t) * H*0.5; // 奥は上に配置
+  return { x: screenX, y: screenY, s: scale };
   }
 
   function render(){
