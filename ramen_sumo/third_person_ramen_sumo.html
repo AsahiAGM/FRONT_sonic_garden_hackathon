@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>三人称トントン相撲（プロトタイプ）</title>
+<title>三人称トントン相撲</title>
 <style>
   :root{--bg:#0d1221;--ui:#efeef0}
   html,body{height:100%;margin:0;background:linear-gradient(180deg,#10203a,#071022);color:var(--ui);font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP"}
@@ -17,7 +17,7 @@
   .status{font-size:14px;color:#fff}
   .termWins{display:flex;gap:12px}
   .muted{color:rgba(255,255,255,0.6)}
-  .credits{font-size:12px;color:#bbb;margin-top:8px}
+  .credits{font-size:12px;color:#bbb;margin-top:8px;text-align:center;line-height:1.4}
 </style>
 </head>
 <body>
@@ -44,11 +44,13 @@
 
   <div class="credits">
     Controls: 左Shift（Left Shift）→ 右前, 右Shift（Right Shift）→ 左前, 同時押しでまっすぐ前進。<br>
-    ローカルで動作：ファイル保存後 `python3 -m http.server` 等で起動し、ブラウザで開いてください。
+    ローカルで動作：ファイル保存後 <code>python3 -m http.server</code> 等で起動し、ブラウザで開いてください。
   </div>
 </div>
 
-<script>
+<!-- Viewクラスなどが入っているメインJSファイル -->
+<script type="module" src="third_person_ramen_sumo.js">
+
 // ------------------ Model ------------------
 const Model = {
   field: { radius: 260 },   // x,z の円形フィールド半径（ワールド単位）
@@ -253,4 +255,173 @@ class GameVM {
 (function(){
   const canvas = document.getElementById('gameCanvas');
   const ctx = canvas.getContext('2d');
-  const W = canvas.wi
+  const W = canvas.width, H = canvas.height;
+  const vm = new GameVM();
+
+  // DOM bindings
+  const timeLeftEl = document.getElementById('timeLeft');
+  const termIdxEl = document.getElementById('termIdx');
+  const termMaxEl = document.getElementById('termMax');
+  const scoreEl = document.getElementById('score');
+  const winsEl = document.getElementById('wins');
+  const startBtn = document.getElementById('startBtn');
+
+  termMaxEl.textContent = Model.terms;
+
+  // input handling (track key states so simultaneous works)
+  window.addEventListener('keydown',(e)=>{
+    if(e.code === 'ShiftLeft'){ vm.input.leftShift = true; }
+    if(e.code === 'ShiftRight'){ vm.input.rightShift = true; }
+    // start
+    if(e.code === 'Space'){ if(vm.phase === 'idle' || vm.phase === 'end') startBtn.click(); }
+  });
+  window.addEventListener('keyup',(e)=>{
+    if(e.code === 'ShiftLeft'){ vm.input.leftShift = false; }
+    if(e.code === 'ShiftRight'){ vm.input.rightShift = false; }
+  });
+
+  startBtn.addEventListener('click',()=>{
+    vm.resetAll();
+    vm.start();
+  });
+
+  vm.onUpdate = ()=>{
+    // update HUD
+    timeLeftEl.textContent = Math.max(0, Math.ceil(vm.timeLeft));
+    termIdxEl.textContent = vm.currentTerm;
+    scoreEl.textContent = `${vm.score.defeated} / ${vm.score.passed}`;
+    winsEl.textContent = `P:${vm.termWins.player} - E:${vm.termWins.enemy}`;
+
+    render();
+    // render result overlay when in result or end
+    if(vm.phase === 'result'){
+      renderResultOverlay(`TERM ${vm.currentTerm} 結果`, `倒した: ${vm.score.defeated}  到達: ${vm.score.passed}`);
+    } else if(vm.phase === 'end'){
+      const final = vm.termWins.player > vm.termWins.enemy ? 'YOU WIN' : vm.termWins.enemy > vm.termWins.player ? 'YOU LOSE' : 'DRAW';
+      renderResultOverlay('GAME END', `${final}  —  ${vm.termWins.player} : ${vm.termWins.enemy}`);
+    }
+  };
+
+  // ---- rendering helpers ----
+  function projectToScreen(worldX, worldZ){
+    // simple perspective projection: map world x,z to screen XY
+    // camera is above and behind; map z (0..max) to scale & y offset
+    const maxZ = Model.enemy.maxZ || 900;
+    const t = Math.max(0, Math.min(1, 1 - worldZ / maxZ)); // 0 at far, 1 at near
+    const scale = 0.4 + t * 1.2; // near => larger
+    const screenX = W/2 + worldX * (0.9 * scale);
+    // map z to vertical position: further is higher (toward top)
+    const baseY = H*0.65;
+    const screenY = baseY - (t * 380);
+    return { x: screenX, y: screenY, s: scale };
+  }
+
+  function render(){
+    // clear
+    ctx.clearRect(0,0,W,H);
+
+    // background gradient ground
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#0b2540');
+    g.addColorStop(1,'#123248');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    // draw horizon / depth cues
+    ctx.fillStyle = 'rgba(255,255,255,0.02)';
+    ctx.fillRect(W/2 - 300, H*0.23, 600, 6);
+
+    // draw field circle (ground plane)
+    drawField();
+
+    // draw enemies sorted by z (far -> near)
+    const enemiesSorted = vm.enemies.slice().sort((a,b)=>b.z - a.z);
+    for(const e of enemiesSorted){
+      drawEnemy(e);
+    }
+
+    // draw player (always on top)
+    drawPlayer(vm.player);
+  }
+
+  function drawField(){
+    // draw circular field as rings to give perspective
+    const rings = 8;
+    for(let i=0;i<rings;i++){
+      const r = (i+1)/rings;
+      const worldZ = r * (Model.enemy.maxZ || 900) * 0.9;
+      const scale = 0.4 + (1 - worldZ / (Model.enemy.maxZ||900)) * 1.2;
+      const screenRadius = Model.field.radius * scale * 0.9;
+      const center = projectToScreen(0, worldZ);
+      ctx.beginPath();
+      ctx.ellipse(W/2, center.y + 80, screenRadius, screenRadius*0.35, 0, 0, Math.PI*2);
+      ctx.fillStyle = `rgba(80,110,150,${0.02 + i*0.01})`;
+      ctx.fill();
+    }
+  }
+
+  function drawEnemy(e){
+    const p = projectToScreen(e.x, e.z);
+    const size = (e.radius) * p.s;
+    // body
+    ctx.save();
+    ctx.beginPath();
+    const hue = 10 + (e.hp*20);
+    ctx.fillStyle = `hsl(${20},70%,${30 + Math.min(40, (4-e.hp)*8)}%)`;
+    ctx.ellipse(p.x, p.y, size, size*0.8, 0, 0, Math.PI*2);
+    ctx.fill();
+    // HP bar above enemy
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(p.x - size*0.9, p.y - size*1.4, size*1.8, 6);
+    const hpRatio = Math.max(0, e.hp / 5);
+    ctx.fillStyle = 'rgba(255,120,40,0.9)';
+    ctx.fillRect(p.x - size*0.9, p.y - size*1.4, size*1.8 * hpRatio, 6);
+    ctx.restore();
+  }
+
+  function drawPlayer(pl){
+    const p = projectToScreen(pl.x, pl.z);
+    const size = pl.radius * p.s * 1.2;
+    ctx.save();
+    // shadow / ground contact
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y + size*0.6, size*1.2, size*0.35, 0, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fill();
+
+    // body
+    ctx.beginPath();
+    ctx.fillStyle = '#6fe0ff';
+    ctx.ellipse(p.x, p.y, size, size*0.85, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // face mark
+    ctx.fillStyle = '#07314b';
+    ctx.fillRect(p.x - size*0.25, p.y - size*0.05, size*0.12, size*0.12);
+    ctx.fillRect(p.x + size*0.13, p.y - size*0.05, size*0.12, size*0.12);
+    ctx.restore();
+  }
+
+  function renderResultOverlay(title, subtitle){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.font = '28px sans-serif';
+    ctx.fillText(title, W/2, H/2 - 18);
+    ctx.font = '18px sans-serif';
+    ctx.fillText(subtitle, W/2, H/2 + 12);
+    ctx.restore();
+  }
+
+  // initial render
+  vm.onUpdate(); // to populate HUD
+  render();
+
+  // expose vm for debugging
+  window.__vm = vm;
+})();
+</script>
+</body>
+</html>
