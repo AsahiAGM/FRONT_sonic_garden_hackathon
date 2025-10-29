@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>カップ麺テトリス (Step 9)</title>
+    <style>
+        body {
+            background-image: url('assets/bg.png');
+            background-size: cover; /* 画面全体に広げる */
+            background-position: center; /* 中央に配置 */
+            background-attachment: fixed; /* スクロールしても背景を固定 */
+
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: sans-serif;
+            flex-direction: column;
+        }
+
+        #game-container {
+            position: relative;
+            width: 500px;
+            height: 700px;
+        }
+
+        canvas {
+            background: #FFFFFF;
+            border: 3px solid #333;
+            box-shadow: 0 0 15px rgba(0,0,0,0.5); /* 影をつけて目立たせる */
+
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        
+        #info {
+            position: absolute; 
+            top: 25px;
+            left: 80px;
+            z-index: 2;
+            font-size: 20px;
+            font-weight: bold;
+            font-family: 'Courier New', Courier, monospace;
+
+            /* 背景が暗くなる可能性があるので、文字を白く、影をつける */
+            color: white;
+            text-shadow: 2px 2px 4px #000000;
+        }
+
+        #scoreDisplay {
+            color: white;
+            background-color: #333;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            z-index: 2;
+
+            /* 背景が暗くなる可能性があるので、文字を白く、影をつける */
+            color: white;
+            text-shadow: 2px 2px 4px #000000;
+        }
+        #assets {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Noodle Blocks</h1>
+    
+    <div id="game-container">
+        
+        <div id="info">
+            <div>SCORE: <span id="scoreDisplay">0</span></div>
+        </div>
+        
+        <canvas id="gameCanvas"></canvas>
+    
+    </div><div id="assets">
+        <img id="bg-image" src="assets/bg.png" alt="Game Background">
+        <img id="noodle-block" src="assets/men.png" alt="Noodle Block">
+        <img id="meat-block" src="assets/niku.png" alt="Meat Block">
+        <img id="egg-block" src="assets/tamago2.png" alt="Egg Block">
+        <img id="shrimp-block" src="assets/ebi.png" alt="Shrimp Block">
+        <img id="leek-block" src="assets/negi.png" alt="Leek Block">
+    </div>
+    
+    <script src="game.js"></script>
+</body>
+</html>
