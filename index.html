@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ラーメンとピクセルの世界</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-image: url('https://copilot.microsoft.com/th/id/BCO.fd35851d-aba0-4555-b923-55be3e71c655.png');
+      background-size: 100vw 100vh;
+      background-position: left top;
+      background-repeat: no-repeat;
+      font-family: sans-serif;
+    }
+    .background-wrapper {
+      position: relative;
+      width: 100%;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .background-image {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .button-container {
+      position: fixed; /* 固定表示に変更 */
+      bottom: 20px;     /* 画面下からの距離 */
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 20px;
+      z-index: 10;      /* 背景より前面に表示 */
+    }
+
+    .nav-button {
+      padding: 12px 24px;
+      background-color: rgba(255, 255, 255, 0.8);
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    .nav-button:hover {
+      background-color: rgba(255, 255, 255, 1);
+    }
+  </style>
+</head>
+<body>
+  <div class="button-container">
+    <button class="nav-button" onclick="location.href='tetris_ramen/index.html'">ラーメンテトリス</button>
+    <button class="nav-button" onclick="location.href='home.html'">ゾウの時間ネズミの時間</button>
+    <button class="nav-button" onclick="location.href='ramen_sumo/ramen_sumo_prpto.html'">ラーメン相撲1</button>
+<button class="nav-button" onclick="location.href='https://studio--studio-1408890332-f0286.us-central1.hosted.app/'">ラーメン相撲2</button>
+
+  </div>
+</body>
+</html>
